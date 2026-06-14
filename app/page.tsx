@@ -158,7 +158,7 @@ function TournamentListScreen({
 
       {/* Filter */}
       <div style={{ ...S.card, marginBottom: 24 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 12, alignItems: "end" }}>
+        <div className="filters" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 12, alignItems: "end" }}>
           <div>
             <label style={{ ...S.muted, display: "block", marginBottom: 6 }}>Zemlja</label>
             <select value={fed} onChange={e => setFed(e.target.value)} style={{ ...S.input }}>
@@ -196,7 +196,7 @@ function TournamentListScreen({
             </div>
           ) : (
             <div style={{ overflowX: "auto" }}>
-              <table style={S.table}>
+              <table className="responsiveTable tournamentTable" style={S.table}>
                 <thead>
                   <tr>
                     <th style={S.th}>Naziv turnira</th>
@@ -320,7 +320,7 @@ function TournamentScreen({
           </div>
 
           <div style={{ overflowX: "auto" }}>
-            <table style={S.table}>
+            <table className="responsiveTable pairingsTable" style={S.table}>
               <thead>
                 <tr>
                   <th style={{ ...S.th, width: 36 }}>#</th>
@@ -478,7 +478,7 @@ function PlayerScreen({
             Partije po kolima
           </h3>
 
-          <table style={S.table}>
+          <table className="responsiveTable playerTable" style={S.table}>
             <thead>
               <tr>
                 <th style={{ ...S.th, width: 40 }}>Kolo</th>
@@ -535,7 +535,7 @@ export default function HomePage() {
     <div style={S.page}>
       {/* Global header */}
       <header style={S.header}>
-        <div style={{ maxWidth: 900, margin: "0 auto", display: "flex", alignItems: "center", gap: 12 }}>
+        <div className="headerInner" style={{ maxWidth: 900, margin: "0 auto", display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ width: 30, height: 30, background: "#eaff00", borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 17, color: "#0a0a0a" }}>
             ♞
           </div>
@@ -546,7 +546,7 @@ export default function HomePage() {
         </div>
       </header>
 
-      <main style={S.content}>
+      <main className="content" style={S.content}>
         {screen.type === "list" && (
           <TournamentListScreen
             onSelect={t => setScreen({ type: "tournament", data: t })}
