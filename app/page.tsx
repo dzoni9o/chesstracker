@@ -10,6 +10,13 @@ import type {
 
 // ─── Konstante ───────────────────────────────────────────────────────────────
 
+const TOURNAMENT_SELECTIONS = [
+  { value: "0", label: "Svi turniri" },
+  { value: "4", label: "Završeni u poslednjih 7 dana" },
+  { value: "5", label: "Stariji završeni turniri" },
+  { value: "7", label: "Poslednjih 10 nedelja sa partijama" },
+];
+
 const COUNTRIES = [
   { code: "SRB", name: "Srbija 🇷🇸" },
   { code: "CRO", name: "Hrvatska 🇭🇷" },
@@ -122,6 +129,7 @@ function TournamentListScreen({
   const [fed, setFed] = useState("SRB");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [selection, setSelection] = useState("0");
   const [tournaments, setTournaments] = useState<TournamentListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -133,7 +141,7 @@ function TournamentListScreen({
     setSearched(true);
 
     try {
-      const params = new URLSearchParams({ fed });
+      const params = new URLSearchParams({ fed, selection });
       if (from) params.set("from", from);
       if (to)   params.set("to", to);
 
@@ -147,7 +155,7 @@ function TournamentListScreen({
     } finally {
       setLoading(false);
     }
-  }, [fed, from, to]);
+  }, [fed, from, to, selection]);
 
   return (
     <>
@@ -158,12 +166,20 @@ function TournamentListScreen({
 
       {/* Filter */}
       <div style={{ ...S.card, marginBottom: 24 }}>
-        <div className="filters" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 12, alignItems: "end" }}>
+        <div className="filters" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto", gap: 12, alignItems: "end" }}>
           <div>
             <label style={{ ...S.muted, display: "block", marginBottom: 6 }}>Zemlja</label>
             <select value={fed} onChange={e => setFed(e.target.value)} style={{ ...S.input }}>
               {COUNTRIES.map(c => (
                 <option key={c.code} value={c.code}>{c.name} ({c.code})</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={{ ...S.muted, display: "block", marginBottom: 6 }}>Prikaz</label>
+            <select value={selection} onChange={e => setSelection(e.target.value)} style={{ ...S.input }}>
+              {TOURNAMENT_SELECTIONS.map(s => (
+                <option key={s.value} value={s.value}>{s.label}</option>
               ))}
             </select>
           </div>

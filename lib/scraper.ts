@@ -1,4 +1,4 @@
-﻿import * as cheerio from "cheerio";
+import * as cheerio from "cheerio";
 import type { Element } from "domhandler";
 import type {
   TournamentListItem,
@@ -14,9 +14,13 @@ const TIMEOUT = 12_000;
 
 // â”€â”€â”€ HTTP helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-async function fetchHtml(url: string): Promise<string> {
+async function fetchHtml(url: string, init: RequestInit = {}): Promise<string> {
   const res = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; ChessTracker/1.0)" },
+    ...init,
+    headers: {
+      "User-Agent": "Mozilla/5.0 (compatible; ChessTracker/1.0)",
+      ...(init.headers || {}),
+    },
     signal: AbortSignal.timeout(TIMEOUT),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} â†’ ${url}`);
@@ -61,6 +65,68 @@ function extractTnrId(href: string): string | null {
   const m = href.match(/tnr(\d+)/i);
   return m ? m[1] : null;
 }
+function normalizeDate(input?: string): string {
+  if (!input) return "";
+  const iso = input.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return input;
+  const compact = input.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (compact) return `${compact[1]}-${compact[2]}-${compact[3]}`;
+  const dotted = input.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (dotted) {
+    return `${dotted[3]}-${dotted[2].padStart(2, "0")}-${dotted[1].padStart(2, "0")}`;
+  }
+  return "";
+}
+
+function extractDateFromText(text: string): string {
+  const dotted = text.match(/\b(\d{1,2})[.\/-](\d{1,2})[.\/-](20\d{2})\b/);
+  if (dotted) {
+    return `${dotted[3]}-${dotted[2].padStart(2, "0")}-${dotted[1].padStart(2, "0")}`;
+  }
+
+  const iso = text.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
+  if (iso) {
+    return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
+  }
+
+  return "";
+}
+
+function dateInRange(date: string, from?: string, to?: string): boolean {
+  const fromDate = normalizeDate(from);
+  const toDate = normalizeDate(to);
+  if (!date) return !fromDate && !toDate;
+  if (fromDate && date < fromDate) return false;
+  if (toDate && date > toDate) return false;
+  return true;
+}
+
+function hiddenValue($: cheerio.CheerioAPI, name: string): string {
+  return $(`input[name="${name}"]`).attr("value") || "";
+}
+
+async function fetchFederationHtml(fed: string, selection: string): Promise<string> {
+  const url = `${BASE}/fed.aspx?lan=1&fed=${fed}`;
+  if (!selection || selection === "0") return fetchHtml(url);
+
+  const initialHtml = await fetchHtml(url);
+  const $ = cheerio.load(initialHtml);
+  const body = new URLSearchParams({
+    __EVENTTARGET: "combo_sel",
+    __EVENTARGUMENT: "",
+    __VIEWSTATE: hiddenValue($, "__VIEWSTATE"),
+    __VIEWSTATEGENERATOR: hiddenValue($, "__VIEWSTATEGENERATOR"),
+    __EVENTVALIDATION: hiddenValue($, "__EVENTVALIDATION"),
+    combo_tur_sel: selection,
+    combo_sort: "0",
+  });
+
+  return fetchHtml(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+}
 
 // â”€â”€â”€ 1. Lista turnira po zemlji â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
@@ -70,23 +136,23 @@ function extractTnrId(href: string): string | null {
 export async function scrapeTournamentList(
   fed: string,
   from?: string,
-  to?: string
+  to?: string,
+  selection = "0"
 ): Promise<TournamentListItem[]> {
-  // chess-results ima paginaciju + filter forme. 
-  // Koristimo direktan URL koji filtrira po datumu.
-  const params = new URLSearchParams({ lan: "1", fed });
-  if (from) params.set("von", from.replace(/-/g, "."));  // DD.MM.YYYY
-  if (to)   params.set("bis", to.replace(/-/g, "."));
-  
-  const url = `${BASE}/fed.aspx?${params}`;
-  const html = await fetchHtml(url);
-  const $ = cheerio.load(html);
+  const hasDateFilter = Boolean(normalizeDate(from) || normalizeDate(to));
+  const selections = hasDateFilter && (!selection || selection === "0")
+    ? ["0", "4", "5", "7"]
+    : [selection || "0"];
 
   const tournaments: TournamentListItem[] = [];
   const seen = new Set<string>();
 
-  // Turniri su prikazani kao redovi u tabeli, svaki sa linkom
-  $("a[href]").each((_, el) => {
+  for (const currentSelection of selections) {
+    const html = await fetchFederationHtml(fed, currentSelection);
+    const $ = cheerio.load(html);
+
+    // Turniri su prikazani kao redovi u tabeli, svaki sa linkom
+    $("a[href]").each((_, el) => {
     const href = $(el).attr("href") || "";
     const id = extractTnrId(href);
     if (!id || seen.has(id)) return;
@@ -96,8 +162,6 @@ export async function scrapeTournamentList(
 
     // Skip navigacione linkove
     if (href.includes("art=") || href.includes("fed.aspx") || href.includes("Default.aspx")) return;
-
-    seen.add(id);
 
     // PokuÅ¡aj da izvuÄemo datum iz roditeljskog reda
     const row = $(el).closest("tr");
@@ -123,17 +187,23 @@ export async function scrapeTournamentList(
       }
     });
 
+    const inferredDate = dateFrom || extractDateFromText(text);
+    if (!dateInRange(inferredDate, from, to)) return;
+
+    seen.add(id);
+
     tournaments.push({
       id,
       name: text,
-      dateFrom,
+      dateFrom: inferredDate,
       dateTo,
       city,
       country: fed,
       rounds,
       players,
     });
-  });
+    });
+  }
 
   return tournaments.slice(0, 50); // limit
 }

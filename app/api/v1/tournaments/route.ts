@@ -12,6 +12,7 @@ export async function GET(req: NextRequest) {
   const fed  = (searchParams.get("fed") || "SRB").toUpperCase().trim();
   const from = searchParams.get("from") || "";
   const to   = searchParams.get("to")   || "";
+  const selection = searchParams.get("selection") || "0";
 
   if (!/^[A-Z]{2,3}$/.test(fed)) {
     return NextResponse.json<ApiResponse<never>>(
@@ -21,7 +22,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const tournaments = await scrapeTournamentList(fed, from, to);
+    const tournaments = await scrapeTournamentList(fed, from, to, selection);
     return NextResponse.json<ApiResponse<TournamentListItem[]>>({
       ok: true,
       data: tournaments,
