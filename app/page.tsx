@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import type {
   TournamentListItem,
   RoundData,
@@ -298,7 +298,9 @@ function TournamentScreen({
   }, [tournament, totalRounds]);
 
   // Učitaj kolo 1 odmah
-  useState(() => { loadRound(1); });
+  useEffect(() => {
+    loadRound(1);
+  }, [loadRound]);
 
   const rounds = Array.from({ length: totalRounds }, (_, i) => i + 1);
 
@@ -410,20 +412,28 @@ function PlayerScreen({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  useState(() => {
+  useEffect(() => {
+    let active = true;
+
     (async () => {
+      setLoading(true);
+      setError("");
       try {
         const res = await fetch(`/api/v1/players/${tnr}/${snr}?fed=${fed}`);
         const json = await res.json();
         if (!json.ok) throw new Error(json.error);
-        setCard(json.data);
+        if (active) setCard(json.data);
       } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : "Greška");
+        if (active) setError(e instanceof Error ? e.message : "Greška");
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     })();
-  });
+
+    return () => {
+      active = false;
+    };
+  }, [tnr, snr, fed]);
 
   const totalPoints = card?.points ?? 0;
   const wins = card?.results.filter(r => r.result === "1").length ?? 0;

@@ -388,58 +388,46 @@ export async function scrapeRound(
   round: number,
   fed: string
 ): Promise<RoundData> {
-  const url = `${BASE}/tnr${tnr}.aspx?lan=1&art=2&rd=${round}&fed=${fed}`;
+  const url = BASE + "/tnr" + tnr + ".aspx?lan=1&art=2&rd=" + round + "&fed=" + fed;
   const html = await fetchHtml(url);
   const $ = cheerio.load(html);
 
   const name = $("title").text().replace("Chess-Results Server Chess-results.com -", "").trim();
 
-  // Ukupno kola
-  const boardPairCells = $("td").filter((_, el) => $(el).text().trim() === "Board Pairings");
+  const boardPairText = $("td")
+    .filter((_, el) => $(el).text().includes("Board Pairings"))
+    .first()
+    .parent()
+    .text();
   let totalRounds = round;
-  const pairingLinks = boardPairCells.first().next().find("a");
-  pairingLinks.each((_, el) => {
-    const m = $(el).text().match(/Rd\.(\d+)/);
-    if (m) totalRounds = Math.max(totalRounds, parseInt(m[1]));
-  });
-  const slashMatch = boardPairCells.first().next().text().match(/\/(\d+)/);
-  if (slashMatch) totalRounds = parseInt(slashMatch[1]);
+  for (const match of boardPairText.matchAll(/Rd\.(\d+)/g)) {
+    totalRounds = Math.max(totalRounds, parseInt(match[1], 10));
+  }
+  const slashMatch = boardPairText.match(/\/(\d+)/);
+  if (slashMatch) totalRounds = parseInt(slashMatch[1], 10);
 
-  // Datum kola
   let date = "";
   const dateMatch = $("body").text().match(/Round \d+ on ([\d/]+)/);
   if (dateMatch) date = dateMatch[1];
 
-  // Parovi su u tabeli sa "Bo." kao prvom Ã„â€¡elijom u headeru
+  const target = findPairingTable($);
   const pairings: Pairing[] = [];
 
-  // NaÃ„â€˜i pravu tabelu: ona Ã„Âiji header sadrÃ…Â¾i "Bo."
-  let targetTable: Element | null = null;
-  $("table").each((_, tbl) => {
-    const headers = $(tbl).find("tr").first().find("td, th").map((_, td) => $(td).text().trim()).get();
-    if (headers.some(h => h === "Bo.") && headers.some(h => h === "White" || h === "Rtg")) {
-      targetTable = tbl;
-      return false; // break
+  if (target) {
+    for (let i = target.headerIndex + 1; i < target.rows.length; i++) {
+      const cells = $(target.rows[i]).children("td, th");
+      if (cells.length < 8) continue;
+      const first = cellText($, cells, 0);
+      if (!/^\d+$/.test(first)) continue;
+      parsePairingRow($, target.headers, cells, pairings);
     }
-  });
-
-  if (!targetTable) {
-    // fallback: pokuÃ…Â¡aj da parsujemo sve redove koji izgledaju kao parovi
-    $("tr").each((_, row) => {
-      const cells = $(row).find("td");
-      if (cells.length < 8) return;
-      const first = $(cells[0]).text().trim();
-      if (!/^\d+$/.test(first)) return;
-      parsePairingRow($, cells, pairings);
-    });
   } else {
-    // Skip header row, parsiraj ostale
-    $(targetTable).find("tr").slice(1).each((_, row) => {
-      const cells = $(row).find("td");
+    $("tr").each((_, row) => {
+      const cells = $(row).children("td, th");
       if (cells.length < 8) return;
-      const first = $(cells[0]).text().trim();
+      const first = cellText($, cells, 0);
       if (!/^\d+$/.test(first)) return;
-      parsePairingRow($, cells, pairings);
+      parsePairingRow($, [], cells, pairings);
     });
   }
 
@@ -453,69 +441,119 @@ export async function scrapeRound(
   };
 }
 
+interface PairingTableMatch {
+  rows: Element[];
+  headerIndex: number;
+  headers: string[];
+}
+
+function findPairingTable($: cheerio.CheerioAPI): PairingTableMatch | null {
+  let best: PairingTableMatch | null = null;
+
+  $("table").each((_, table) => {
+    const directRows = $(table).children("tbody").children("tr").add($(table).children("tr")).toArray();
+    const rows = directRows.length > 0 ? directRows : $(table).find("tr").toArray();
+
+    rows.forEach((row, headerIndex) => {
+      const headers = $(row).children("td, th").map((_, cell) => $(cell).text().replace(/\s+/g, " ").trim()).get();
+      if (!isPairingHeader(headers)) return;
+
+      const candidate = { rows, headerIndex, headers };
+      if (!best || rows.length < best.rows.length) best = candidate;
+    });
+  });
+
+  return best;
+}
+
+function isPairingHeader(headers: string[]): boolean {
+  return findHeader(headers, "bo") >= 0
+    && findHeader(headers, "white") >= 0
+    && findHeader(headers, "result") >= 0
+    && findHeader(headers, "black") >= 0;
+}
+
+function normalizeHeaderLabel(value: string): string {
+  return value.toLowerCase().replace(/[^a-z]/g, "");
+}
+
+function findHeader(headers: string[], wanted: "bo" | "white" | "black" | "result"): number {
+  return headers.findIndex((header) => {
+    const h = normalizeHeaderLabel(header);
+    if (wanted === "bo") return h === "bo" || h === "board" || h === "brett";
+    if (wanted === "white") return h === "white" || h === "weiss" || h === "wit";
+    if (wanted === "black") return h === "black" || h === "schwarz" || h === "zwart";
+    return h === "result" || h === "res" || h === "erg";
+  });
+}
+
+function findHeaderAfter(headers: string[], wanted: string, afterIndex: number): number {
+  return headers.findIndex((header, index) => index > afterIndex && normalizeHeaderLabel(header) === wanted);
+}
+
+function findLastHeaderAfter(headers: string[], wanted: string, afterIndex: number): number {
+  let found = -1;
+  headers.forEach((header, index) => {
+    if (index > afterIndex && normalizeHeaderLabel(header) === wanted) found = index;
+  });
+  return found;
+}
+
+function cellText($: cheerio.CheerioAPI, cells: cheerio.Cheerio<Element>, index: number): string {
+  if (index < 0 || index >= cells.length) return "";
+  return $(cells[index]).text().replace(/\s+/g, " ").trim();
+}
+
 function parsePairingRow(
-  $: ReturnType<typeof cheerio.load>,
-  cells: ReturnType<typeof cheerio.load>["fn"] extends never ? never : ReturnType<ReturnType<typeof cheerio.load>>,
+  $: cheerio.CheerioAPI,
+  headers: string[],
+  cells: cheerio.Cheerio<Element>,
   pairings: Pairing[]
 ): void {
-  // Kolone: Bo. | No. | (title) | White | Rtg | Pts. | Result | Pts. | (title) | Black | Rtg | No.
-  //          0     1      2        3      4      5       6       7       8         9      10    11
   try {
-    const board     = parseInt($(cells[0]).text().trim()) || 0;
-    const whiteNo   = parseInt($(cells[1]).text().trim()) || 0;
-    const whiteTitle= $(cells[2]).text().trim();
-    const whiteName = $(cells[3]).text().trim();
-    const whiteElo  = parseElo($(cells[4]).text());
-    const whitePts  = parsePoints($(cells[5]).text());
-    const result    = parseResult($(cells[6]).text());
-    const blackPts  = parsePoints($(cells[7]).text());
+    const boardIdx = findHeader(headers, "bo");
+    const whiteIdx = findHeader(headers, "white");
+    const resultIdx = findHeader(headers, "result");
+    const blackIdx = findHeader(headers, "black");
 
-    // Title i Black mogu biti u col 8 i 9, ili direktno 8 i 9 bez title
-    let blackTitleIdx = 8, blackNameIdx = 9, blackEloIdx = 10, blackNoIdx = 11;
-    // Provjera: ako col[8] izgleda kao naslov (kratak, bez razmaka)
-    const col8 = $(cells[8])?.text().trim() ?? "";
-    if (!col8 || col8.length <= 4) {
-      // Jeste title kolona
-    } else {
-      // Nema title kolone, pomjeri
-      blackTitleIdx = -1;
-      blackNameIdx = 8;
-      blackEloIdx = 9;
-      blackNoIdx = 10;
-    }
+    const board = parseInt(cellText($, cells, boardIdx >= 0 ? boardIdx : 0), 10) || 0;
+    const whiteNoIdx = headers.length ? findHeaderAfter(headers, "no", boardIdx) : 1;
+    const whiteRtgIdx = headers.length ? findHeaderAfter(headers, "rtg", whiteIdx) : 4;
+    const whitePtsIdx = headers.length ? findHeaderAfter(headers, "pts", whiteIdx) : 5;
+    const blackPtsIdx = headers.length ? findHeaderAfter(headers, "pts", resultIdx) : 7;
+    const blackRtgIdx = headers.length ? findHeaderAfter(headers, "rtg", blackIdx) : 10;
+    const blackNoIdx = headers.length ? findLastHeaderAfter(headers, "no", blackIdx) : 11;
 
-    const blackTitle= blackTitleIdx >= 0 ? ($(cells[blackTitleIdx])?.text().trim() ?? "") : "";
-    const blackName = $(cells[blackNameIdx])?.text().trim() ?? "";
-    const blackElo  = parseElo($(cells[blackEloIdx])?.text() ?? "");
-    const blackNo   = parseInt($(cells[blackNoIdx])?.text().trim() ?? "0") || 0;
+    const resolvedWhiteIdx = whiteIdx >= 0 ? whiteIdx : 3;
+    const resolvedResultIdx = resultIdx >= 0 ? resultIdx : 6;
+    const resolvedBlackIdx = blackIdx >= 0 ? blackIdx : 9;
+    const whiteTitleIdx = resolvedWhiteIdx > 0 ? resolvedWhiteIdx - 1 : -1;
+    const blackTitleIdx = resolvedBlackIdx > 0 ? resolvedBlackIdx - 1 : -1;
 
+    const whiteName = cellText($, cells, resolvedWhiteIdx);
+    const blackName = cellText($, cells, resolvedBlackIdx);
     if (!whiteName && !blackName) return;
 
     pairings.push({
       board,
-      whiteNo,
+      whiteNo: parseInt(cellText($, cells, whiteNoIdx), 10) || 0,
       whiteName,
-      whiteTitle,
-      whiteElo,
+      whiteTitle: cellText($, cells, whiteTitleIdx),
+      whiteElo: parseElo(cellText($, cells, whiteRtgIdx)),
       whiteFed: "",
-      whitePoints: whitePts,
-      result,
-      blackNo,
+      whitePoints: parsePoints(cellText($, cells, whitePtsIdx)),
+      result: parseResult(cellText($, cells, resolvedResultIdx)),
+      blackNo: parseInt(cellText($, cells, blackNoIdx), 10) || 0,
       blackName,
-      blackTitle,
-      blackElo,
+      blackTitle: cellText($, cells, blackTitleIdx),
+      blackElo: parseElo(cellText($, cells, blackRtgIdx)),
       blackFed: "",
-      blackPoints: blackPts,
+      blackPoints: parsePoints(cellText($, cells, blackPtsIdx)),
     });
   } catch {
-    // Skip malformed rows
+    // Skip malformed rows.
   }
 }
-
-// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ 4. Kartica igraÃ„Âa Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
-//
-//  URL: https://chess-results.com/tnrXXX.aspx?lan=1&art=9&fed=SRB&snr=N
-//  Tabela: Rd. | Bo. | SNo | (title) | Name | Rtg | FED | Pts. | Res.
 
 export async function scrapePlayerCard(
   tnr: string,
