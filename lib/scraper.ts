@@ -12,22 +12,32 @@ import type {
 const BASE = "https://chess-results.com";
 const TIMEOUT = 12_000;
 
-// â”€â”€â”€ HTTP helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// HTTP helper
 
-async function fetchHtml(url: string, init: RequestInit = {}): Promise<string> {
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; ChessTracker/1.0)",
-      ...(init.headers || {}),
-    },
-    signal: AbortSignal.timeout(TIMEOUT),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status} â†’ ${url}`);
-  return res.text();
+interface FetchHtmlResult {
+  html: string;
+  url: string;
 }
 
-// â”€â”€â”€ Parseri pomoÄ‡ni â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+async function fetchHtmlResponse(url: string, init: RequestInit = {}): Promise<FetchHtmlResult> {
+  const headers = new Headers(init.headers);
+  if (!headers.has("User-Agent")) {
+    headers.set("User-Agent", "Mozilla/5.0 (compatible; ChessTracker/1.0)");
+  }
+
+  const res = await fetch(url, {
+    ...init,
+    headers,
+    signal: AbortSignal.timeout(TIMEOUT),
+  });
+  if (!res.ok) throw new Error("HTTP " + res.status + " -> " + url);
+  return { html: await res.text(), url: res.url };
+}
+
+async function fetchHtml(url: string, init: RequestInit = {}): Promise<string> {
+  const { html } = await fetchHtmlResponse(url, init);
+  return html;
+}
 
 function parseElo(s: string): number {
   const n = parseInt(s?.trim() || "0", 10);
@@ -67,26 +77,39 @@ function extractTnrId(href: string): string | null {
 }
 function normalizeDate(input?: string): string {
   if (!input) return "";
-  const iso = input.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (iso) return input;
-  const compact = input.match(/^(\d{4})(\d{2})(\d{2})$/);
-  if (compact) return `${compact[1]}-${compact[2]}-${compact[3]}`;
-  const dotted = input.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  const value = input.trim();
+  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return value;
+  const slashed = value.match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
+  if (slashed) return slashed[1] + "-" + slashed[2] + "-" + slashed[3];
+  const compact = value.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (compact) return compact[1] + "-" + compact[2] + "-" + compact[3];
+  const dotted = value.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})$/);
   if (dotted) {
-    return `${dotted[3]}-${dotted[2].padStart(2, "0")}-${dotted[1].padStart(2, "0")}`;
+    return dotted[3] + "-" + dotted[2].padStart(2, "0") + "-" + dotted[1].padStart(2, "0");
   }
   return "";
+}
+
+function normalizeChessResultsDate(input?: string): string {
+  const value = input?.trim() || "";
+  const ymd = value.match(/^(20\d{2})[.\/-](\d{1,2})[.\/-](\d{1,2})$/);
+  if (ymd) {
+    return ymd[1] + "-" + ymd[2].padStart(2, "0") + "-" + ymd[3].padStart(2, "0");
+  }
+
+  return normalizeDate(value);
 }
 
 function extractDateFromText(text: string): string {
   const dotted = text.match(/\b(\d{1,2})[.\/-](\d{1,2})[.\/-](20\d{2})\b/);
   if (dotted) {
-    return `${dotted[3]}-${dotted[2].padStart(2, "0")}-${dotted[1].padStart(2, "0")}`;
+    return dotted[3] + "-" + dotted[2].padStart(2, "0") + "-" + dotted[1].padStart(2, "0");
   }
 
   const iso = text.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
   if (iso) {
-    return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
+    return iso[1] + "-" + iso[2].padStart(2, "0") + "-" + iso[3].padStart(2, "0");
   }
 
   return "";
@@ -102,11 +125,36 @@ function dateInRange(date: string, from?: string, to?: string): boolean {
 }
 
 function hiddenValue($: cheerio.CheerioAPI, name: string): string {
-  return $(`input[name="${name}"]`).attr("value") || "";
+  return $("input[name=\"" + name + "\"]").attr("value") || "";
+}
+
+function buildWebFormsParams($: cheerio.CheerioAPI): URLSearchParams {
+  const params = new URLSearchParams();
+
+  $("input[name]").each((_, el) => {
+    const input = $(el);
+    const name = input.attr("name");
+    if (!name) return;
+
+    const type = (input.attr("type") || "text").toLowerCase();
+    if (["button", "checkbox", "file", "image", "radio", "reset", "submit"].includes(type)) return;
+    params.set(name, input.attr("value") || "");
+  });
+
+  $("select[name]").each((_, el) => {
+    const select = $(el);
+    const name = select.attr("name");
+    if (!name || params.has(name)) return;
+    const selected = select.find("option[selected]").first().attr("value");
+    const first = select.find("option").first().attr("value");
+    params.set(name, selected ?? first ?? "");
+  });
+
+  return params;
 }
 
 async function fetchFederationHtml(fed: string, selection: string): Promise<string> {
-  const url = `${BASE}/fed.aspx?lan=1&fed=${fed}`;
+  const url = BASE + "/fed.aspx?lan=1&fed=" + fed;
   if (!selection || selection === "0") return fetchHtml(url);
 
   const initialHtml = await fetchHtml(url);
@@ -128,10 +176,70 @@ async function fetchFederationHtml(fed: string, selection: string): Promise<stri
   });
 }
 
-// â”€â”€â”€ 1. Lista turnira po zemlji â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-//
-//  URL: https://chess-results.com/fed.aspx?lan=1&fed=SRB
-//  Opciono filter po datumu (pageUrl je buildovan u route handler-u)
+async function fetchTournamentDatabaseHtml(fed: string, from?: string, to?: string): Promise<string> {
+  const initial = await fetchHtmlResponse(BASE + "/turniersuche.aspx?lan=1&SNode=S0");
+  const $ = cheerio.load(initial.html);
+  const body = buildWebFormsParams($);
+  const fromDate = normalizeDate(from);
+  const toDate = normalizeDate(to);
+
+  body.set("__EVENTTARGET", "");
+  body.set("__EVENTARGUMENT", "");
+  body.set("ctl00$P1$combo_land", fed);
+  body.set("ctl00$P1$txt_von_tag", fromDate);
+  body.set("ctl00$P1$txt_bis_tag", toDate);
+  body.set("ctl00$P1$combo_art", "5");
+  body.set("ctl00$P1$combo_sort", "4");
+  body.set("ctl00$P1$combo_bedenkzeit", "0");
+  body.set("ctl00$P1$combo_anzahl_zeilen", "5");
+  body.set("ctl00$P1$cb_suchen", "Search");
+
+  return fetchHtml(initial.url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Referer: initial.url,
+    },
+    body,
+  });
+}
+
+function parseTournamentDatabaseRows($: cheerio.CheerioAPI, fed: string): TournamentListItem[] {
+  const tournaments: TournamentListItem[] = [];
+  const seen = new Set<string>();
+
+  $("a[href*='tnr']").each((_, el) => {
+    const href = $(el).attr("href") || "";
+    const id = extractTnrId(href);
+    if (!id || seen.has(id)) return;
+
+    const row = $(el).closest("tr");
+    const cells = row.find("td");
+    if (cells.length < 19) return;
+
+    const name = $(el).text().trim();
+    if (!name || name.length < 4) return;
+
+    const cellText = (index: number) => $(cells[index]).text().replace(/\s+/g, " ").trim();
+    const dateFrom = normalizeChessResultsDate(cellText(5));
+    const dateTo = normalizeChessResultsDate(cellText(6));
+    if (!dateFrom && !dateTo) return;
+
+    seen.add(id);
+    tournaments.push({
+      id,
+      name,
+      dateFrom,
+      dateTo,
+      city: cellText(12),
+      country: cellText(2) || fed,
+      rounds: parseInt(cellText(16), 10) || 0,
+      players: parseInt(cellText(17), 10) || 0,
+    });
+  });
+
+  return tournaments;
+}
 
 export async function scrapeTournamentList(
   fed: string,
@@ -140,30 +248,27 @@ export async function scrapeTournamentList(
   selection = "0"
 ): Promise<TournamentListItem[]> {
   const hasDateFilter = Boolean(normalizeDate(from) || normalizeDate(to));
-  const selections = hasDateFilter && (!selection || selection === "0")
-    ? ["0", "4", "5", "7"]
-    : [selection || "0"];
 
+  if (hasDateFilter) {
+    const html = await fetchTournamentDatabaseHtml(fed, from, to);
+    const $ = cheerio.load(html);
+    return parseTournamentDatabaseRows($, fed);
+  }
+
+  const html = await fetchFederationHtml(fed, selection || "0");
+  const $ = cheerio.load(html);
   const tournaments: TournamentListItem[] = [];
   const seen = new Set<string>();
 
-  for (const currentSelection of selections) {
-    const html = await fetchFederationHtml(fed, currentSelection);
-    const $ = cheerio.load(html);
-
-    // Turniri su prikazani kao redovi u tabeli, svaki sa linkom
-    $("a[href]").each((_, el) => {
+  $("a[href]").each((_, el) => {
     const href = $(el).attr("href") || "";
     const id = extractTnrId(href);
     if (!id || seen.has(id)) return;
 
     const text = $(el).text().trim();
     if (!text || text.length < 4) return;
-
-    // Skip navigacione linkove
     if (href.includes("art=") || href.includes("fed.aspx") || href.includes("Default.aspx")) return;
 
-    // PokuÅ¡aj da izvuÄemo datum iz roditeljskog reda
     const row = $(el).closest("tr");
     const cells = row.find("td");
     let dateFrom = "";
@@ -191,7 +296,6 @@ export async function scrapeTournamentList(
     if (!dateInRange(inferredDate, from, to)) return;
 
     seen.add(id);
-
     tournaments.push({
       id,
       name: text,
@@ -202,16 +306,10 @@ export async function scrapeTournamentList(
       rounds,
       players,
     });
-    });
-  }
+  });
 
-  return tournaments.slice(0, 50); // limit
+  return tournaments.slice(0, 50);
 }
-
-// â”€â”€â”€ 2. Detalji turnira â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-//
-//  URL: https://chess-results.com/tnrXXX.aspx?lan=1&art=2&fed=SRB
-//  Parsujemo header tabelu sa info linkovima
 
 export async function scrapeTournamentDetail(
   tnr: string,
@@ -221,10 +319,10 @@ export async function scrapeTournamentDetail(
   const html = await fetchHtml(url);
   const $ = cheerio.load(html);
 
-  // Ime turnira je u <title> ili u prvoj Ä‡eliji info tabele
+  // Ime turnira je u <title> ili u prvoj Ã„â€¡eliji info tabele
   let name = $("title").text().replace("Chess-Results Server Chess-results.com -", "").trim();
 
-  // Zadnja runda: traÅ¾imo "***Rd.N***" ili bold rd link
+  // Zadnja runda: traÃ…Â¾imo "***Rd.N***" ili bold rd link
   let currentRound = 0;
   let totalRounds = 0;
 
@@ -233,7 +331,7 @@ export async function scrapeTournamentDetail(
   const allRds = [...rdMatches].map(m => parseInt(m[1]));
   totalRounds = allRds.length > 0 ? Math.max(...allRds) : 0;
 
-  // Kurzivni/bold oznaÄava aktuelnu rundu (npr. "Rd.4/7")
+  // Kurzivni/bold oznaÃ„Âava aktuelnu rundu (npr. "Rd.4/7")
   const currentMatch = boardPairText.match(/Rd\.(\d+)\/(\d+)/);
   if (currentMatch) {
     currentRound = parseInt(currentMatch[1]);
@@ -255,7 +353,7 @@ export async function scrapeTournamentDetail(
   
   $("td").each((_, el) => {
     const txt = $(el).text().trim();
-    const dateMatch = txt.match(/(\d{2})\.(\d{2})\.(\d{4})\s*[-â€“]\s*(\d{2})\.(\d{2})\.(\d{4})/);
+    const dateMatch = txt.match(/(\d{2})\.(\d{2})\.(\d{4})\s*[-Ã¢â‚¬â€œ]\s*(\d{2})\.(\d{2})\.(\d{4})/);
     if (dateMatch && !dateFrom) {
       dateFrom = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
       dateTo = `${dateMatch[6]}-${dateMatch[5]}-${dateMatch[4]}`;
@@ -280,7 +378,7 @@ export async function scrapeTournamentDetail(
   };
 }
 
-// â”€â”€â”€ 3. Parovi za kolo â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ 3. Parovi za kolo Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 //
 //  URL: https://chess-results.com/tnrXXX.aspx?lan=1&art=2&rd=N&fed=SRB
 //  Tabela ima kolone: Bo. | No. | (title) | White | Rtg | Pts. | Result | Pts. | (title) | Black | Rtg | No.
@@ -312,10 +410,10 @@ export async function scrapeRound(
   const dateMatch = $("body").text().match(/Round \d+ on ([\d/]+)/);
   if (dateMatch) date = dateMatch[1];
 
-  // Parovi su u tabeli sa "Bo." kao prvom Ä‡elijom u headeru
+  // Parovi su u tabeli sa "Bo." kao prvom Ã„â€¡elijom u headeru
   const pairings: Pairing[] = [];
 
-  // NaÄ‘i pravu tabelu: ona Äiji header sadrÅ¾i "Bo."
+  // NaÃ„â€˜i pravu tabelu: ona Ã„Âiji header sadrÃ…Â¾i "Bo."
   let targetTable: Element | null = null;
   $("table").each((_, tbl) => {
     const headers = $(tbl).find("tr").first().find("td, th").map((_, td) => $(td).text().trim()).get();
@@ -326,7 +424,7 @@ export async function scrapeRound(
   });
 
   if (!targetTable) {
-    // fallback: pokuÅ¡aj da parsujemo sve redove koji izgledaju kao parovi
+    // fallback: pokuÃ…Â¡aj da parsujemo sve redove koji izgledaju kao parovi
     $("tr").each((_, row) => {
       const cells = $(row).find("td");
       if (cells.length < 8) return;
@@ -414,7 +512,7 @@ function parsePairingRow(
   }
 }
 
-// â”€â”€â”€ 4. Kartica igraÄa â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ 4. Kartica igraÃ„Âa Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 //
 //  URL: https://chess-results.com/tnrXXX.aspx?lan=1&art=9&fed=SRB&snr=N
 //  Tabela: Rd. | Bo. | SNo | (title) | Name | Rtg | FED | Pts. | Res.
@@ -444,7 +542,7 @@ export async function scrapePlayerCard(
       const value = $(cells[1]).text().trim();
 
       if (label.includes("name"))              name = value;
-      if (label.includes("starting rank"))     {} // snr je veÄ‡ poznat
+      if (label.includes("starting rank"))     {} // snr je veÃ„â€¡ poznat
       if (label.includes("title"))             title = value;
       if (label === "rating")                  elo = parseElo(value);
       if (label.includes("national"))          eloNat = parseElo(value);
@@ -457,7 +555,7 @@ export async function scrapePlayerCard(
     return false; // Break after first matching table
   });
 
-  // Fallback: pokuÅ¡aj da naÄ‘eÅ¡ ime iz heading-a stranice
+  // Fallback: pokuÃ…Â¡aj da naÃ„â€˜eÃ…Â¡ ime iz heading-a stranice
   if (!name) {
     const h2 = $("h2, h3").first().text().trim();
     if (h2) name = h2;
@@ -468,7 +566,7 @@ export async function scrapePlayerCard(
 
   $("table").each((_, tbl) => {
     const headers = $(tbl).find("tr").first().find("td").map((_, td) => $(td).text().trim()).get();
-    // TraÅ¾imo tabelu sa Rd. | Bo. | SNo | Name | Rtg | FED | Pts. | Res.
+    // TraÃ…Â¾imo tabelu sa Rd. | Bo. | SNo | Name | Rtg | FED | Pts. | Res.
     if (!headers.some(h => h === "Rd.") || !headers.some(h => h === "Res.")) return;
 
     $(tbl).find("tr").slice(1).each((_, row) => {
@@ -482,7 +580,7 @@ export async function scrapePlayerCard(
       const board = parseInt($(cells[1]).text().trim()) || 0;
       const oppNo = parseInt($(cells[2]).text().trim()) || 0;
 
-      // Kolona 3 moÅ¾e biti title (kratka) ili direktno ime
+      // Kolona 3 moÃ…Â¾e biti title (kratka) ili direktno ime
       let titleIdx = 3, nameIdx = 4, rtgIdx = 5, fedIdx = 6, ptsIdx = 7, resIdx = 8;
       const col3 = $(cells[3]).text().trim();
       if (col3.length > 6 && !["GM","IM","FM","CM","WGM","WIM","WFM","WCM","AFM","AGM"].includes(col3)) {
@@ -502,7 +600,7 @@ export async function scrapePlayerCard(
       results.push({
         round: rd,
         board,
-        color, // biÄ‡e odreÄ‘eno iz parova
+        color, // biÃ„â€¡e odreÃ„â€˜eno iz parova
         oppNo,
         oppName,
         oppTitle,
@@ -520,7 +618,7 @@ export async function scrapePlayerCard(
     tournamentId: tnr,
     tournamentName,
     snr: parseInt(snr),
-    name: name || `IgraÄ #${snr}`,
+    name: name || `IgraÃ„Â #${snr}`,
     title,
     fed: playerFed || fed,
     elo,
@@ -532,6 +630,7 @@ export async function scrapePlayerCard(
     results,
   };
 }
+
 
 
 
