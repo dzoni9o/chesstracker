@@ -634,7 +634,7 @@ export async function scrapePlayerCard(
   };
 }
 
-interface TournamentPlayerRow {
+export interface TournamentPlayerRow {
   snr: number;
   title: string;
   name: string;
@@ -643,7 +643,7 @@ interface TournamentPlayerRow {
   fed: string;
 }
 
-async function scrapeTournamentPlayers(tnr: string, fed: string): Promise<TournamentPlayerRow[]> {
+export async function scrapeTournamentPlayers(tnr: string, fed: string): Promise<TournamentPlayerRow[]> {
   const html = await fetchHtml(BASE + "/tnr" + tnr + ".aspx?lan=1&art=0&fed=" + fed);
   const $ = cheerio.load(html);
   const players: TournamentPlayerRow[] = [];
