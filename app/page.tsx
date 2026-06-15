@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Pairing, PlayerCard, RoundData, TournamentDetail, TournamentListItem } from "@/lib/types";
@@ -180,6 +180,9 @@ function TournamentScreen({ tnr, fed, cached, onBack, onOpenPlayer }: { tnr: str
     setLoadingDetail(true);
     setError("");
     setDetail(null);
+    setRoundData(null);
+    setSelectedRound(1);
+
     (async () => {
       try {
         const res = await fetch("/api/v1/tournaments/" + tnr + "?fed=" + fed);
@@ -192,6 +195,7 @@ function TournamentScreen({ tnr, fed, cached, onBack, onOpenPlayer }: { tnr: str
         if (active) setLoadingDetail(false);
       }
     })();
+
     return () => { active = false; };
   }, [tnr, fed]);
 
@@ -199,6 +203,7 @@ function TournamentScreen({ tnr, fed, cached, onBack, onOpenPlayer }: { tnr: str
     setSelectedRound(rd);
     setLoadingRound(true);
     setError("");
+
     try {
       const res = await fetch("/api/v1/tournaments/" + tnr + "/rounds/" + rd + "?fed=" + fed);
       const json = await res.json();
@@ -212,13 +217,61 @@ function TournamentScreen({ tnr, fed, cached, onBack, onOpenPlayer }: { tnr: str
     }
   }, [tnr, fed]);
 
-  useEffect(() => { loadRound(1); }, [loadRound]);
+  const knownRounds = Math.max(detail?.rounds || 0, cached?.rounds || 0);
+  const totalRounds = Math.max(knownRounds, roundData?.totalRounds || 0);
+
+  useEffect(() => {
+    if (loadingDetail) return;
+    if (knownRounds > 0) loadRound(1);
+  }, [knownRounds, loadRound, loadingDetail]);
 
   const title = detail?.name || cached?.name || "Turnir " + tnr;
-  const totalRounds = Math.max(detail?.rounds || 0, roundData?.totalRounds || 0, cached?.rounds || 0, 1);
   const rounds = Array.from({ length: totalRounds }, (_, index) => index + 1);
+  const hasNoPublishedResults = !loadingDetail && totalRounds === 0;
 
-  return <section className="screen-stack"><BackButton label="pretraga" onClick={onBack} /><section className="panel detail-panel"><p className="card-kicker">Turnir ID {tnr}</p><h1>{title}</h1><div className="meta-row detail-meta"><span>{fed}</span><span>{detail?.dateFrom || cached?.dateFrom || "datum nije ucitan"}</span>{(detail?.dateTo || cached?.dateTo) && <span>{detail?.dateTo || cached?.dateTo}</span>}{detail?.lastUpdate && <span>Update {detail.lastUpdate}</span>}</div>{loadingDetail && <p className="helper-text">Ucitavam podatke turnira...</p>}</section><section className="round-strip" aria-label="Kola">{rounds.map((rd) => <button className={rd === selectedRound ? "round-chip active" : "round-chip"} type="button" key={rd} onClick={() => loadRound(rd)}>Kolo {rd}</button>)}</section>{error && <ErrorBox msg={error} />}{loadingRound && <Spinner label={"Ucitavam kolo " + selectedRound} />}{!loadingRound && roundData && <section className="panel pairings-panel"><div className="section-head"><div><p className="card-kicker">Kolo {roundData.round}{roundData.date ? " / " + roundData.date : ""}</p><h2>{roundData.pairings.length} partija</h2></div></div>{roundData.pairings.length === 0 ? <div className="empty-state"><h2>Nema ucitanih parova</h2><p>Chess-results nije vratio tabelu parova za ovo kolo.</p></div> : <div className="pairing-list">{roundData.pairings.map((pairing: Pairing) => <article className="pairing-card" key={pairing.board + "-" + pairing.whiteNo + "-" + pairing.blackNo}><div className="board-no">{pairing.board}</div><button className="player-link white" type="button" onClick={() => pairing.whiteNo && onOpenPlayer(pairing.whiteNo)} disabled={!pairing.whiteNo}><strong>{pairing.whiteName || "-"}</strong><span>{pairing.whiteTitle || ""}{pairing.whiteElo ? " " + pairing.whiteElo : ""}</span></button><ResultBadge result={pairing.result} /><button className="player-link black" type="button" onClick={() => pairing.blackNo && onOpenPlayer(pairing.blackNo)} disabled={!pairing.blackNo}><strong>{pairing.blackName || "-"}</strong><span>{pairing.blackTitle || ""}{pairing.blackElo ? " " + pairing.blackElo : ""}</span></button></article>)}</div>}</section>}</section>;
+  return (
+    <section className="screen-stack">
+      <BackButton label="pretraga" onClick={onBack} />
+
+      <section className="panel detail-panel">
+        <p className="card-kicker">Turnir ID {tnr}</p>
+        <h1>{title}</h1>
+        <div className="meta-row detail-meta">
+          <span>{fed}</span>
+          <span>{detail?.dateFrom || cached?.dateFrom || "datum nije ucitan"}</span>
+          {(detail?.dateTo || cached?.dateTo) && <span>{detail?.dateTo || cached?.dateTo}</span>}
+          {detail?.lastUpdate && <span>Update {detail.lastUpdate}</span>}
+        </div>
+        {loadingDetail && <p className="helper-text">Ucitavam podatke turnira...</p>}
+      </section>
+
+      {rounds.length > 0 && (
+        <section className="round-strip" aria-label="Kola">
+          {rounds.map((rd) => (
+            <button className={rd === selectedRound ? "round-chip active" : "round-chip"} type="button" key={rd} onClick={() => loadRound(rd)}>Kolo {rd}</button>
+          ))}
+        </section>
+      )}
+
+      {error && <ErrorBox msg={error} />}
+      {hasNoPublishedResults && (
+        <section className="panel pairings-panel">
+          <div className="empty-state">
+            <h2>Nema unetih rezultata</h2>
+            <p>Turnir je pronadjen, ali Chess-Results jos nema objavljene parove ili rezultate za ovaj turnir.</p>
+          </div>
+        </section>
+      )}
+      {loadingRound && <Spinner label={"Ucitavam kolo " + selectedRound} />}
+
+      {!loadingRound && roundData && (
+        <section className="panel pairings-panel">
+          <div className="section-head"><div><p className="card-kicker">Kolo {roundData.round}{roundData.date ? " / " + roundData.date : ""}</p><h2>{roundData.pairings.length} partija</h2></div></div>
+          {roundData.pairings.length === 0 ? <div className="empty-state"><h2>Nema ucitanih parova</h2><p>Chess-results nije vratio tabelu parova za ovo kolo.</p></div> : <div className="pairing-list">{roundData.pairings.map((pairing: Pairing) => <article className="pairing-card" key={pairing.board + "-" + pairing.whiteNo + "-" + pairing.blackNo}><div className="board-no">{pairing.board}</div><button className="player-link white" type="button" onClick={() => pairing.whiteNo && onOpenPlayer(pairing.whiteNo)} disabled={!pairing.whiteNo}><strong>{pairing.whiteName || "-"}</strong><span>{pairing.whiteTitle || ""}{pairing.whiteElo ? " " + pairing.whiteElo : ""}</span></button><ResultBadge result={pairing.result} /><button className="player-link black" type="button" onClick={() => pairing.blackNo && onOpenPlayer(pairing.blackNo)} disabled={!pairing.blackNo}><strong>{pairing.blackName || "-"}</strong><span>{pairing.blackTitle || ""}{pairing.blackElo ? " " + pairing.blackElo : ""}</span></button></article>)}</div>}
+        </section>
+      )}
+    </section>
+  );
 }
 
 function PlayerScreen({ tnr, snr, fed, onBack }: { tnr: string; snr: number; fed: string; onBack: () => void }) {
