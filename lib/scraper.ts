@@ -326,10 +326,12 @@ export async function scrapeTournamentDetail(
   let currentRound = 0;
   let totalRounds = 0;
 
-  const boardPairText = $("td").filter((_, el) => $(el).text().includes("Board Pairings")).first().next().text();
+  const boardPairText = $("td").filter((_, el) => $(el).text().includes("Board Pairings")).first().parent().text();
   const rdMatches = boardPairText.matchAll(/Rd\.(\d+)/g);
-  const allRds = [...rdMatches].map(m => parseInt(m[1]));
-  totalRounds = allRds.length > 0 ? Math.max(...allRds) : 0;
+  const allRds = [...rdMatches].map(m => parseInt(m[1], 10));
+  const bodyRoundMatches = [...$("body").text().matchAll(/Round\s+(\d+)\s+on/g)].map(m => parseInt(m[1], 10));
+  const everyRound = [...allRds, ...bodyRoundMatches].filter(Boolean);
+  totalRounds = everyRound.length > 0 ? Math.max(...everyRound) : 0;
 
   // Kurzivni/bold oznaÃ„Âava aktuelnu rundu (npr. "Rd.4/7")
   const currentMatch = boardPairText.match(/Rd\.(\d+)\/(\d+)/);
@@ -338,6 +340,8 @@ export async function scrapeTournamentDetail(
     totalRounds = parseInt(currentMatch[2]);
   } else if (allRds.length > 0) {
     currentRound = Math.max(...allRds);
+  } else if (totalRounds > 0) {
+    currentRound = totalRounds;
   }
 
   // Last update
