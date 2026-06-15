@@ -67,6 +67,17 @@ export interface PlayerResult {
   result: "1" | "0" | "½" | "+" | "-" | null;  // null = nije odigrano
 }
 
+export interface PlayerTournamentItem {
+  id: string;
+  name: string;
+  dateFrom: string;
+  dateTo: string;
+  city: string;
+  country: string;
+  rounds: number;
+  players: number;
+}
+
 export interface PlayerCard {
   tournamentId: string;
   tournamentName: string;
@@ -74,6 +85,7 @@ export interface PlayerCard {
   name: string;
   title: string;
   fed: string;
+  fideId: string;
   elo: number;
   eloNational: number;
   eloIntl: number;
@@ -81,6 +93,7 @@ export interface PlayerCard {
   points: number;
   rank: number;
   results: PlayerResult[];
+  tournaments: PlayerTournamentItem[];
 }
 
 // ─── API response ────────────────────────────────────────────────────────────

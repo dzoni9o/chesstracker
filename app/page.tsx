@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Pairing, PlayerCard, RoundData, TournamentDetail, TournamentListItem } from "@/lib/types";
 
 type Filters = { fed: string; selection: string; from: string; to: string };
@@ -274,17 +274,33 @@ function TournamentScreen({ tnr, fed, cached, onBack, onOpenPlayer }: { tnr: str
   );
 }
 
-function PlayerScreen({ tnr, snr, fed, onBack }: { tnr: string; snr: number; fed: string; onBack: () => void }) {
+function PlayerScreen({ tnr, snr, fed, filters, onBack, onOpenTournament }: {
+  tnr: string;
+  snr: number;
+  fed: string;
+  filters: Filters;
+  onBack: () => void;
+  onOpenTournament: (item: TournamentListItem) => void;
+}) {
   const [card, setCard] = useState<PlayerCard | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
   useEffect(() => {
     let active = true;
     setLoading(true);
     setError("");
+    setCard(null);
+
     (async () => {
       try {
-        const res = await fetch("/api/v1/players/" + tnr + "/" + snr + "?fed=" + fed);
+        const params = new URLSearchParams({ fed });
+        const historyYear = (filters.from || filters.to).slice(0, 4);
+        if (/^\d{4}$/.test(historyYear)) {
+          params.set("historyFrom", historyYear + "-01-01");
+          params.set("historyTo", new Date().toISOString().slice(0, 10));
+        }
+        const res = await fetch("/api/v1/players/" + tnr + "/" + snr + "?" + params.toString());
         const json = await res.json();
         if (!json.ok) throw new Error(json.error);
         if (active) setCard(json.data);
@@ -294,12 +310,46 @@ function PlayerScreen({ tnr, snr, fed, onBack }: { tnr: string; snr: number; fed
         if (active) setLoading(false);
       }
     })();
+
     return () => { active = false; };
-  }, [tnr, snr, fed]);
+  }, [tnr, snr, fed, filters.from, filters.to]);
+
   const wins = card?.results.filter((item) => item.result === "1").length ?? 0;
   const draws = card?.results.filter((item) => normalizeHalf(item.result) === "1/2").length ?? 0;
   const losses = card?.results.filter((item) => item.result === "0").length ?? 0;
-  return <section className="screen-stack"><BackButton label="turnir" onClick={onBack} />{loading && <Spinner label="Ucitavam igraca" />}{error && <ErrorBox msg={error} />}{!loading && card && <><section className="panel player-panel"><p className="card-kicker">Igrac #{snr}</p><h1>{card.name}</h1><div className="meta-row detail-meta"><span>{card.fed || fed}</span>{card.title && <span>{card.title}</span>}{card.elo > 0 && <span>ELO {card.elo}</span>}<span>{card.points} poena</span></div><div className="stats-grid"><span><strong>{wins}</strong>Pobede</span><span><strong>{draws}</strong>Remiji</span><span><strong>{losses}</strong>Porazi</span></div></section><section className="panel"><p className="card-kicker">Partije po kolima</p><div className="player-results">{card.results.map((item) => <article className="player-result-row" key={item.round}><span>Kolo {item.round}</span><strong>{item.oppName || "-"}</strong><span>{item.oppElo || "-"}</span><span className={"player-result " + resultTone(item.result)}>{formatResult(item.result)}</span></article>)}</div></section></>}</section>;
+
+  return (
+    <section className="screen-stack">
+      <BackButton label="turnir" onClick={onBack} />
+      {loading && <Spinner label="Ucitavam igraca" />}
+      {error && <ErrorBox msg={error} />}
+      {!loading && card && <>
+        <section className="panel player-panel">
+          <p className="card-kicker">Igrac #{snr}</p>
+          <h1>{card.name}</h1>
+          <div className="meta-row detail-meta">
+            <span>{card.fed || fed}</span>
+            {card.title && <span>{card.title}</span>}
+            {card.elo > 0 && <span>ELO {card.elo}</span>}
+            {card.fideId && <span>FIDE {card.fideId}</span>}
+            {card.rank > 0 && <span>Plasman {card.rank}</span>}
+            <span>{card.points} poena</span>
+          </div>
+          <div className="stats-grid"><span><strong>{wins}</strong>Pobede</span><span><strong>{draws}</strong>Remiji</span><span><strong>{losses}</strong>Porazi</span></div>
+        </section>
+
+        <section className="panel">
+          <div className="section-head"><div><p className="card-kicker">Turniri igraca</p><h2>{card.tournaments.length} turnira</h2></div></div>
+          {card.tournaments.length === 0 ? <div className="empty-state"><h2>Nema pronadjenih turnira</h2><p>Nema drugih pronadjenih turnira za ovog igraca u aktivnom periodu.</p></div> : <div className="tournament-list compact-list">{card.tournaments.map((item) => <button className="tournament-card" type="button" key={item.id} onClick={() => onOpenTournament(item)}><span className="card-kicker">ID {item.id}</span><strong>{item.name}</strong><span className="muted-line">{item.city || item.country}</span><span className="meta-row"><span>{item.dateFrom || "-"}{item.dateTo && item.dateTo !== item.dateFrom ? " / " + item.dateTo : ""}</span><span>{item.rounds || "-"} kola</span><span>{item.players || "-"} igraca</span></span></button>)}</div>}
+        </section>
+
+        <section className="panel">
+          <p className="card-kicker">Partije po kolima</p>
+          {card.results.length === 0 ? <div className="empty-state"><h2>Nema ucitanih partija</h2><p>Chess-Results nije vratio partije za ovog igraca.</p></div> : <div className="player-results">{card.results.map((item) => <article className="player-result-row" key={item.round}><span>Kolo {item.round}</span><strong>{item.oppName || "-"}</strong><span>{item.oppElo || "-"}</span><span className={"player-result " + resultTone(item.result)}>{formatResult(item.result)}</span></article>)}</div>}
+        </section>
+      </>}
+    </section>
+  );
 }
 
 export default function HomePage() {
@@ -345,5 +395,5 @@ export default function HomePage() {
 
   const cachedTournament = route.view === "tournament" || route.view === "player" ? tournaments.find((item) => item.id === route.tnr) || null : null;
 
-  return <main className="app-shell"><div className="phone-frame"><header className="topbar"><div className="brand"><span className="brand-mark">CT</span><span>Chess Tracker</span></div><span className="topbar-subtitle">chess-results</span></header>{route.view === "list" && <TournamentListScreen filters={filters} setFilters={setFiltersAndUrl} tournaments={tournaments} setTournaments={setTournaments} searched={searched} setSearched={setSearched} onOpenTournament={(item) => setRoute({ view: "tournament", tnr: item.id, fed: item.country || filters.fed })} />}{route.view === "tournament" && <TournamentScreen tnr={route.tnr} fed={route.fed} cached={cachedTournament} onBack={() => setRoute({ view: "list" })} onOpenPlayer={(snr) => setRoute({ view: "player", tnr: route.tnr, fed: route.fed, snr })} />}{route.view === "player" && <PlayerScreen tnr={route.tnr} snr={route.snr} fed={route.fed} onBack={() => setRoute({ view: "tournament", tnr: route.tnr, fed: route.fed })} />}</div></main>;
+  return <main className="app-shell"><div className="phone-frame"><header className="topbar"><div className="brand"><span className="brand-mark">CT</span><span>Chess Tracker</span></div><span className="topbar-subtitle">chess-results</span></header>{route.view === "list" && <TournamentListScreen filters={filters} setFilters={setFiltersAndUrl} tournaments={tournaments} setTournaments={setTournaments} searched={searched} setSearched={setSearched} onOpenTournament={(item) => setRoute({ view: "tournament", tnr: item.id, fed: item.country || filters.fed })} />}{route.view === "tournament" && <TournamentScreen tnr={route.tnr} fed={route.fed} cached={cachedTournament} onBack={() => setRoute({ view: "list" })} onOpenPlayer={(snr) => setRoute({ view: "player", tnr: route.tnr, fed: route.fed, snr })} />}{route.view === "player" && <PlayerScreen tnr={route.tnr} snr={route.snr} fed={route.fed} filters={filters} onBack={() => setRoute({ view: "tournament", tnr: route.tnr, fed: route.fed })} onOpenTournament={(item) => { setTournaments((prev) => prev.some((existing) => existing.id === item.id) ? prev : [item, ...prev]); setRoute({ view: "tournament", tnr: item.id, fed: item.country || route.fed }); }} />}</div></main>;
 }

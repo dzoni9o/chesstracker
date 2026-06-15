@@ -7,6 +7,7 @@ import type {
   Pairing,
   PlayerCard,
   PlayerResult,
+  PlayerTournamentItem,
 } from "./types";
 
 const BASE = "https://chess-results.com";
@@ -562,107 +563,66 @@ function parsePairingRow(
 export async function scrapePlayerCard(
   tnr: string,
   snr: string,
-  fed: string
+  fed: string,
+  historyFrom?: string,
+  historyTo?: string
 ): Promise<PlayerCard> {
-  const url = `${BASE}/tnr${tnr}.aspx?lan=1&art=9&fed=${fed}&snr=${snr}`;
+  const url = BASE + "/tnr" + tnr + ".aspx?lan=1&art=9&fed=" + fed + "&snr=" + snr;
   const html = await fetchHtml(url);
   const $ = cheerio.load(html);
 
   const tournamentName = $("title").text().replace("Chess-Results Server Chess-results.com -", "").trim();
 
-  // Player info tabela
-  let name = "", title = "", playerFed = "", elo = 0, eloNat = 0, eloIntl = 0;
+  let name = "", title = "", playerFed = "", fideId = "";
+  let elo = 0, eloNat = 0, eloIntl = 0;
   let performanceRating: number | null = null, points = 0, rank = 0;
 
-  $("table").each((_, tbl) => {
-    const text = $(tbl).text();
-    if (!text.includes("Performance rating") && !text.includes("Starting rank")) return;
-    
-    $(tbl).find("tr").each((_, row) => {
-      const cells = $(row).find("td");
-      const label = $(cells[0]).text().trim().toLowerCase();
-      const value = $(cells[1]).text().trim();
+  $("table").each((_, table) => {
+    const rows = $(table).find("tr");
+    const labels = rows.map((_, row) => cellText($, $(row).children("td, th"), 0).toLowerCase()).get();
+    if (!labels.includes("name") || !labels.some((label) => label.includes("starting rank"))) return;
 
-      if (label.includes("name"))              name = value;
-      if (label.includes("starting rank"))     {} // snr je veÃ„â€¡ poznat
-      if (label.includes("title"))             title = value;
-      if (label === "rating")                  elo = parseElo(value);
-      if (label.includes("national"))          eloNat = parseElo(value);
-      if (label.includes("international"))     eloIntl = parseElo(value);
-      if (label.includes("performance"))       performanceRating = parseElo(value) || null;
-      if (label.includes("points"))            points = parsePoints(value) ?? 0;
-      if (label.includes("rank"))              rank = parseInt(value) || 0;
-      if (label.includes("federation"))        playerFed = value;
+    rows.each((_, row) => {
+      const cells = $(row).children("td, th");
+      if (cells.length < 2) return;
+      const label = cellText($, cells, 0).toLowerCase();
+      const value = cellText($, cells, 1);
+
+      if (label === "name") name = value;
+      if (label === "title") title = value;
+      if (label === "rating") elo = parseElo(value);
+      if (label.includes("national")) eloNat = parseElo(value);
+      if (label.includes("international")) eloIntl = parseElo(value);
+      if (label.includes("performance")) performanceRating = parseElo(value) || null;
+      if (label === "points") points = parsePoints(value) ?? 0;
+      if (label === "rank") rank = parseInt(value, 10) || 0;
+      if (label === "federation") playerFed = value;
+      if (label.includes("fide") || label.includes("ident")) fideId = value && /^\d{4,}$/.test(value) ? value : fideId;
     });
-    return false; // Break after first matching table
-  });
-
-  // Fallback: pokuÃ…Â¡aj da naÃ„â€˜eÃ…Â¡ ime iz heading-a stranice
-  if (!name) {
-    const h2 = $("h2, h3").first().text().trim();
-    if (h2) name = h2;
-  }
-
-  // Results tabela
-  const results: PlayerResult[] = [];
-
-  $("table").each((_, tbl) => {
-    const headers = $(tbl).find("tr").first().find("td").map((_, td) => $(td).text().trim()).get();
-    // TraÃ…Â¾imo tabelu sa Rd. | Bo. | SNo | Name | Rtg | FED | Pts. | Res.
-    if (!headers.some(h => h === "Rd.") || !headers.some(h => h === "Res.")) return;
-
-    $(tbl).find("tr").slice(1).each((_, row) => {
-      const cells = $(row).find("td");
-      if (cells.length < 7) return;
-
-      const rdText = $(cells[0]).text().trim();
-      const rd = parseInt(rdText);
-      if (!rd) return;
-
-      const board = parseInt($(cells[1]).text().trim()) || 0;
-      const oppNo = parseInt($(cells[2]).text().trim()) || 0;
-
-      // Kolona 3 moÃ…Â¾e biti title (kratka) ili direktno ime
-      let titleIdx = 3, nameIdx = 4, rtgIdx = 5, fedIdx = 6, ptsIdx = 7, resIdx = 8;
-      const col3 = $(cells[3]).text().trim();
-      if (col3.length > 6 && !["GM","IM","FM","CM","WGM","WIM","WFM","WCM","AFM","AGM"].includes(col3)) {
-        // Col3 nije title
-        titleIdx = -1; nameIdx = 3; rtgIdx = 4; fedIdx = 5; ptsIdx = 6; resIdx = 7;
-      }
-
-      const oppTitle  = titleIdx >= 0 ? $(cells[titleIdx]).text().trim() : "";
-      const oppName   = $(cells[nameIdx])?.find("a").text() || $(cells[nameIdx])?.text().trim() || "";
-      const oppElo    = parseElo($(cells[rtgIdx])?.text() ?? "");
-      const oppFed    = $(cells[fedIdx])?.text().trim() ?? "";
-      const oppPoints = parsePoints($(cells[ptsIdx])?.text() ?? "");
-      const resRaw    = $(cells[resIdx])?.text().trim() ?? "";
-      const result    = parsePlayerResult(resRaw);
-      const color: "white" | "black" = resIdx < cells.length ? "white" : "white"; // TODO
-
-      results.push({
-        round: rd,
-        board,
-        color, // biÃ„â€¡e odreÃ„â€˜eno iz parova
-        oppNo,
-        oppName,
-        oppTitle,
-        oppElo,
-        oppFed,
-        oppPoints,
-        result,
-      });
-    });
-
     return false;
   });
+
+  const startList = await scrapeTournamentPlayers(tnr, fed);
+  const ownStart = startList.find((player) => player.snr === parseInt(snr, 10));
+  if (ownStart) {
+    if (!name) name = ownStart.name;
+    if (!title) title = ownStart.title;
+    if (!fideId) fideId = ownStart.fideId;
+    if (!elo) elo = ownStart.elo;
+    if (!playerFed) playerFed = ownStart.fed;
+  }
+
+  const results = parsePlayerResults($);
+  const tournaments = name ? await scrapePlayerTournamentHistory(name, fideId, fed, historyFrom, historyTo) : [];
 
   return {
     tournamentId: tnr,
     tournamentName,
-    snr: parseInt(snr),
-    name: name || `IgraÃ„Â #${snr}`,
+    snr: parseInt(snr, 10),
+    name: name || "Igrac #" + snr,
     title,
     fed: playerFed || fed,
+    fideId,
     elo,
     eloNational: eloNat,
     eloIntl,
@@ -670,9 +630,138 @@ export async function scrapePlayerCard(
     points,
     rank,
     results,
+    tournaments,
   };
 }
 
+interface TournamentPlayerRow {
+  snr: number;
+  title: string;
+  name: string;
+  fideId: string;
+  elo: number;
+  fed: string;
+}
 
+async function scrapeTournamentPlayers(tnr: string, fed: string): Promise<TournamentPlayerRow[]> {
+  const html = await fetchHtml(BASE + "/tnr" + tnr + ".aspx?lan=1&art=0&fed=" + fed);
+  const $ = cheerio.load(html);
+  const players: TournamentPlayerRow[] = [];
 
+  $("table").each((_, table) => {
+    const rows = $(table).find("tr").toArray();
+    const headerIndex = rows.findIndex((row) => {
+      const headers = $(row).children("td, th").map((_, cell) => cellText($, $(cell).parent().children("td, th"), _)).get();
+      return headers.some((h) => normalizeHeaderLabel(h) === "sno" || normalizeHeaderLabel(h) === "no") && headers.some((h) => normalizeHeaderLabel(h) === "name");
+    });
+    if (headerIndex < 0) return;
+    const headers = $(rows[headerIndex]).children("td, th").map((_, cell) => $(cell).text().replace(/\s+/g, " ").trim()).get();
+    const noIdx = findAnyHeader(headers, ["sno", "no"]);
+    const nameIdx = findAnyHeader(headers, ["name"]);
+    const fideIdx = findAnyHeader(headers, ["fideid", "fide"]);
+    const rtgIdx = findAnyHeader(headers, ["rtg", "rating"]);
+    const fedIdx = findAnyHeader(headers, ["fed"]);
 
+    for (let i = headerIndex + 1; i < rows.length; i++) {
+      const cells = $(rows[i]).children("td, th");
+      if (cells.length < 3) continue;
+      const snr = parseInt(cellText($, cells, noIdx), 10) || 0;
+      const playerName = cellText($, cells, nameIdx);
+      if (!snr || !playerName) continue;
+      players.push({
+        snr,
+        title: nameIdx > 0 ? cellText($, cells, nameIdx - 1) : "",
+        name: playerName,
+        fideId: fideIdx >= 0 ? cellText($, cells, fideIdx) : "",
+        elo: rtgIdx >= 0 ? parseElo(cellText($, cells, rtgIdx)) : 0,
+        fed: fedIdx >= 0 ? cellText($, cells, fedIdx) : fed,
+      });
+    }
+    return false;
+  });
+
+  return players;
+}
+
+function parsePlayerResults($: cheerio.CheerioAPI): PlayerResult[] {
+  const results: PlayerResult[] = [];
+
+  $("table").each((_, table) => {
+    const rows = $(table).find("tr").toArray();
+    const headerIndex = rows.findIndex((row) => {
+      const headers = $(row).children("td, th").map((_, cell) => $(cell).text().replace(/\s+/g, " ").trim()).get();
+      return findAnyHeader(headers, ["rd"]) >= 0 && findAnyHeader(headers, ["res"]) >= 0 && findAnyHeader(headers, ["name"]) >= 0;
+    });
+    if (headerIndex < 0) return;
+
+    const headers = $(rows[headerIndex]).children("td, th").map((_, cell) => $(cell).text().replace(/\s+/g, " ").trim()).get();
+    const rdIdx = findAnyHeader(headers, ["rd"]);
+    const boIdx = findAnyHeader(headers, ["bo"]);
+    const snoIdx = findAnyHeader(headers, ["sno", "no"]);
+    const nameIdx = findAnyHeader(headers, ["name"]);
+    const rtgIdx = findAnyHeader(headers, ["rtg", "rating"]);
+    const fedIdx = findAnyHeader(headers, ["fed"]);
+    const ptsIdx = findAnyHeader(headers, ["pts"]);
+    const resIdx = findAnyHeader(headers, ["res"]);
+
+    for (let i = headerIndex + 1; i < rows.length; i++) {
+      const cells = $(rows[i]).children("td, th");
+      if (cells.length < 7) continue;
+      const rd = parseInt(cellText($, cells, rdIdx), 10) || 0;
+      if (!rd) continue;
+      results.push({
+        round: rd,
+        board: parseInt(cellText($, cells, boIdx), 10) || 0,
+        color: "white",
+        oppNo: parseInt(cellText($, cells, snoIdx), 10) || 0,
+        oppName: cellText($, cells, nameIdx),
+        oppTitle: nameIdx > 0 ? cellText($, cells, nameIdx - 1) : "",
+        oppElo: rtgIdx >= 0 ? parseElo(cellText($, cells, rtgIdx)) : 0,
+        oppFed: fedIdx >= 0 ? cellText($, cells, fedIdx) : "",
+        oppPoints: ptsIdx >= 0 ? parsePoints(cellText($, cells, ptsIdx)) : null,
+        result: parsePlayerResult(cellText($, cells, resIdx)),
+      });
+    }
+    return false;
+  });
+
+  return results;
+}
+
+async function scrapePlayerTournamentHistory(
+  playerName: string,
+  fideId: string,
+  fed: string,
+  from?: string,
+  to?: string
+): Promise<PlayerTournamentItem[]> {
+  const fromDate = normalizeDate(from) || new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0, 10);
+  const toDate = normalizeDate(to) || new Date().toISOString().slice(0, 10);
+  const tournaments = await scrapeTournamentList(fed, fromDate, toDate);
+  const limited = tournaments.slice(0, 80);
+  const found: PlayerTournamentItem[] = [];
+  const targetName = normalizePlayerName(playerName);
+
+  await Promise.all(limited.map(async (tournament) => {
+    try {
+      const players = await scrapeTournamentPlayers(tournament.id, fed);
+      const match = players.some((player) => {
+        if (fideId && player.fideId && player.fideId === fideId) return true;
+        return normalizePlayerName(player.name) === targetName;
+      });
+      if (match) found.push({ ...tournament });
+    } catch {
+      // Ignore individual tournament failures.
+    }
+  }));
+
+  return found.sort((a, b) => (b.dateFrom || "").localeCompare(a.dateFrom || ""));
+}
+
+function normalizePlayerName(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function findAnyHeader(headers: string[], wanted: string[]): number {
+  return headers.findIndex((header) => wanted.includes(normalizeHeaderLabel(header)));
+}
