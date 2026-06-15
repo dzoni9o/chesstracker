@@ -303,16 +303,20 @@ function PlayerScreen({ tnr, snr, fed, onBack }: { tnr: string; snr: number; fed
 }
 
 export default function HomePage() {
-  const [route, setRouteState] = useState<RouteState>(() => readRoute());
-  const [filters, setFilters] = useState<Filters>(() => readFilters());
+  const [route, setRouteState] = useState<RouteState>({ view: "list" });
+  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [tournaments, setTournaments] = useState<TournamentListItem[]>([]);
   const [searched, setSearchedState] = useState(false);
 
   useEffect(() => {
+    setRouteState(readRoute());
+    setFilters(readFilters());
+
     const cached = sessionStorage.getItem("chess-tracker:last-results");
     const wasSearched = sessionStorage.getItem("chess-tracker:last-searched") === "1";
+    const hasSearchedParam = new URLSearchParams(window.location.search).get("searched") === "1";
     if (cached) { try { setTournaments(JSON.parse(cached)); } catch {} }
-    if (wasSearched) setSearchedState(true);
+    if (wasSearched || hasSearchedParam) setSearchedState(true);
   }, []);
 
   useEffect(() => {
